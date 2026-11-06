@@ -1,0 +1,48 @@
+# Apps Script AI Editor
+
+Edit your Google Apps Script code by describing changes in plain English. The AI proposes the new code, you review it, and one click pushes it into your Apps Script project.
+
+- `index.html`: the website (hosted on GitHub Pages)
+- `Proxy.gs`: a small Apps Script that holds your Claude API key and calls Claude for you
+
+## One-time setup
+
+### A. Deploy the proxy (keeps your API key in Google)
+
+1. Go to script.google.com and click **New project**. Name it `AI Proxy`.
+2. Delete the default code, then paste in the full contents of `Proxy.gs`.
+3. Click **Project Settings** (gear icon) → **Script Properties** → **Add script property**. Add two:
+   - `ANTHROPIC_API_KEY` = your Claude API key
+   - `SHARED_SECRET` = any password you make up (write it down; you'll enter it on the website)
+4. Click **Deploy** → **New deployment** → type **Web app**.
+   - Execute as: **Me**
+   - Who has access: **Anyone**
+5. Click **Deploy**, approve the permissions, and copy the **Web app URL**.
+
+### B. Turn on the Apps Script API
+
+Go to script.google.com/home/usersettings and switch **Google Apps Script API** to On.
+
+### C. Turn on GitHub Pages
+
+In this repo: **Settings → Pages → Source: Deploy from a branch → Branch: main, folder: / (root) → Save.**
+After a minute your site is at `https://<your-github-username>.github.io/App-script-builder-with-AI/`.
+
+## Using the editor
+
+1. Open the site and fill in **Settings**:
+   - **Script ID**: in your target Apps Script project, click **Project Settings** → **Script ID**.
+   - **Proxy web app URL**: from step A5.
+   - **Proxy shared secret**: the `SHARED_SECRET` from step A3.
+   Click **Save settings**.
+2. Click **Sign in with Google** and approve. Then click **Load project files**.
+3. Choose the file to change, describe the change, and click **Ask AI**.
+4. Review the proposed code (edit it if needed), then click **Push to Apps Script**.
+
+The push overwrites the file in your project, so check the proposal first. Undo history is still available in the Apps Script editor (**Version history**).
+
+## Notes
+
+- Your API key is only stored in the Apps Script proxy's Script Properties. It never goes into this repo or the website.
+- Anyone who knows the proxy URL *and* the shared secret can use your API key. Keep the secret private, and change it in Script Properties if it leaks.
+- The website needs an OAuth client ID (already set in `index.html`). Its authorized origin must be `https://<your-github-username>.github.io`.

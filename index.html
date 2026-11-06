@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apps Script AI Editor</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; max-width: 1100px; margin-inline: auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 12px; }
+  fieldset { border: 1px solid #8884; border-radius: 8px; margin: 0 0 14px; padding: 12px; }
+  legend { font-weight: 600; padding: 0 6px; }
+  label { display: block; font-size: .85rem; margin: 8px 0 4px; }
+  input, select, textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; border-radius: 6px; border: 1px solid #8886; }
+  textarea.code { font-family: ui-monospace, Consolas, monospace; font-size: .85rem; min-height: 260px; white-space: pre; }
+  textarea.prompt { min-height: 70px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #8886; cursor: pointer; margin-top: 8px; margin-right: 6px; }
+  button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 760px) { .row { grid-template-columns: 1fr; } }
+  #status { font-size: .9rem; margin-top: 8px; white-space: pre-wrap; }
+  #error { color: #dc2626; font-size: .9rem; white-space: pre-wrap; }
+  .hint { font-size: .8rem; opacity: .75; margin: 4px 0 0; }
+</style>
+</head>
+<body>
+
+<h1>Apps Script AI Editor</h1>
+
+<!-- 1. Settings -->
+<fieldset>
+  <legend>1. Settings (saved in this browser)</legend>
+  <label for="scriptId">Apps Script project ID (Script ID)</label>
+  <input id="scriptId" placeholder="e.g. 1AbC...xyz">
+  <p class="hint">In the Apps Script editor: Project Settings (gear icon) → Script ID.</p>
+
+  <label for="proxyUrl">Proxy web app URL</label>
+  <input id="proxyUrl" placeholder="https://script.google.com/macros/s/.../exec">
+  <p class="hint">The URL you get after deploying Proxy.gs (see README).</p>
+
+  <label for="secret">Proxy shared secret</label>
+  <input id="secret" type="password" placeholder="The SHARED_SECRET you set in the proxy">
+
+  <button id="saveSettings">Save settings</button>
+</fieldset>
+
+<!-- 2. Sign in -->
+<fieldset>
+  <legend>2. Google sign-in</legend>
+  <button id="signIn" class="primary">Sign in with Google</button>
+  <button id="loadProject" disabled>Load project files</button>
+  <p class="hint" id="authState">Not signed in.</p>
+</fieldset>
+
+<!-- 3. Edit -->
+<fieldset>
+  <legend>3. Ask AI to change a file</legend>
+  <label for="fileSelect">File to change</label>
+  <select id="fileSelect" disabled><option>— load project first —</option></select>
+
+  <label for="prompt">What should change?</label>
+  <textarea id="prompt" class="prompt" placeholder="e.g. Add a function that emails me the sheet total every morning."></textarea>
+  <button id="askAi" class="primary" disabled>Ask AI</button>
+</fieldset>
+
+<!-- 4. Review and push -->
+<fieldset>
+  <legend>4. Review and push to Apps Script</legend>
+  <div class="row">
+    <div>
+      <label for="currentCode">Current code (in Apps Script)</label>
+      <textarea id="currentCode" class="code" readonly></textarea>
+    </div>
+    <div>
+      <label for="proposedCode">Proposed code (AI)</label>
+      <textarea id="proposedCode" class="code"></textarea>
+    </div>
+  </div>
+  <p class="hint">You can edit the proposed code before pushing.</p>
+  <button id="push" class="primary" disabled>Push to Apps Script</button>
+  <button id="discard" disabled>Discard proposal</button>
+  <div id="status"></div>
+  <div id="error"></div>
+</fieldset>
+
+<script>
+/* ============ CONFIG ============ */
+// Paste your OAuth client ID here (from Google Cloud Console).
+const CLIENT_ID = "412933231605-id8ao6ucov6e29db5h2kedqtlgeoh24r.apps.googleusercontent.com";
+const SCOPES = "https://www.googleapis.com/auth/script.projects";
+
+/* ============ STATE ============ */
+let accessToken = null;
+let projectFiles = [];      // [{name, type, source}] as returned by Apps Script API
+let proposal = null;        // {file, content}
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (msg) => { $("status").textContent = msg || ""; $("error").textContent = ""; };
+const setError = (msg) => { $("error").textContent = msg || ""; };
+
+/* ============ SETTINGS ============ */
+const SETTING_KEYS = ["scriptId", "proxyUrl", "secret"];
+SETTING_KEYS.forEach(k => { $(k).value = localStorage.getItem("ase_" + k) || ""; });
+
+$("saveSettings").onclick = () => {
+  SETTING_KEYS.forEach(k => localStorage.setItem("ase_" + k, $(k).value.trim()));
+  setStatus("Settings saved in this browser.");
+};
+
+/* ============ GOOGLE SIGN-IN ============ */
+let tokenClient = null;
+function initAuth() {
+  if (!window.google || !google.accounts) { setTimeout(initAuth, 300); return; }
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: (resp) => {
+      if (resp.error) { setError("Sign-in failed: " + resp.error); return; }
+      accessToken = resp.access_token;
+      $("authState").textContent = "Signed in. Click 'Load project files'.";
+      $("loadProject").disabled = false;
+    },
+  });
+}
+initAuth();
+
+$("signIn").onclick = () => {
+  if (!tokenClient) { setError("Google sign-in is still loading. Try again in a moment."); return; }
+  tokenClient.requestAccessToken({ prompt: "consent" });
+};
+
+/* ============ APPS SCRIPT API ============ */
+async function apiFetch(url, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: { "Authorization": "Bearer " + accessToken, "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error((data.error && data.error.message) || ("HTTP " + res.status));
+  return data;
+}
+
+$("loadProject").onclick = async () => {
+  try {
+    const id = $("scriptId").value.trim();
+    if (!id) throw new Error("Enter the Script ID in Settings first.");
+    setStatus("Loading project files...");
+    const data = await apiFetch(`https://script.googleapis.com/v1/projects/${encodeURIComponent(id)}/content`);
+    projectFiles = data.files || [];
+    const sel = $("fileSelect");
+    sel.innerHTML = "";
+    projectFiles.forEach((f, i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = f.name + (f.type ? " (" + f.type + ")" : "");
+      sel.appendChild(opt);
+    });
+    sel.disabled = false;
+    $("askAi").disabled = false;
+    showCurrentFile();
+    setStatus(`Loaded ${projectFiles.length} file(s).`);
+  } catch (e) { setError("Could not load project: " + e.message); }
+};
+
+function showCurrentFile() {
+  const f = projectFiles[$("fileSelect").value];
+  $("currentCode").value = f ? (f.source || "") : "";
+}
+$("fileSelect").onchange = showCurrentFile;
+
+/* ============ ASK AI (via Apps Script proxy) ============ */
+$("askAi").onclick = async () => {
+  try {
+    const url = $("proxyUrl").value.trim();
+    const secret = $("secret").value.trim();
+    if (!url || !secret) throw new Error("Enter the proxy URL and secret in Settings.");
+    const f = projectFiles[$("fileSelect").value];
+    if (!f) throw new Error("Load the project and choose a file first.");
+    const instruction = $("prompt").value.trim();
+    if (!instruction) throw new Error("Describe what should change.");
+
+    $("askAi").disabled = true;
+    setStatus("Asking AI...");
+    // text/plain avoids a CORS preflight, which Apps Script web apps don't support.
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ secret, file: f.name, code: f.source || "", instruction }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Proxy error");
+    proposal = { file: f.name, content: data.content };
+    $("proposedCode").value = data.content;
+    $("push").disabled = false;
+    $("discard").disabled = false;
+    setStatus("Review the proposed code, edit if needed, then click Push.");
+  } catch (e) {
+    setError("AI request failed: " + e.message);
+  } finally {
+    $("askAi").disabled = false;
+  }
+};
+
+/* ============ PUSH ============ */
+$("push").onclick = async () => {
+  try {
+    if (!proposal) throw new Error("Nothing to push.");
+    const id = $("scriptId").value.trim();
+    const newSource = $("proposedCode").value;
+    if (!confirm(`Overwrite "${proposal.file}" in your Apps Script project with this code?`)) return;
+
+    setStatus("Pushing...");
+    // The API replaces the whole project, so send every file and change only the target.
+    const files = projectFiles.map(f => ({
+      name: f.name,
+      type: f.type,
+      source: f.name === proposal.file ? newSource : f.source,
+    }));
+    await apiFetch(`https://script.googleapis.com/v1/projects/${encodeURIComponent(id)}/content`, {
+      method: "PUT",
+      body: JSON.stringify({ files }),
+    });
+
+    // Refresh local copy so the next change starts from what's in Apps Script.
+    projectFiles = projectFiles.map(f => f.name === proposal.file ? { ...f, source: newSource } : f);
+    showCurrentFile();
+    proposal = null;
+    $("push").disabled = true;
+    $("discard").disabled = true;
+    $("proposedCode").value = "";
+    setStatus("Pushed to Apps Script. Your changes are saved in the project.");
+  } catch (e) { setError("Push failed: " + e.message); }
+};
+
+$("discard").onclick = () => {
+  proposal = null;
+  $("proposedCode").value = "";
+  $("push").disabled = true;
+  $("discard").disabled = true;
+  setStatus("Proposal discarded.");
+};
+</script>
+</body>
+</html>
