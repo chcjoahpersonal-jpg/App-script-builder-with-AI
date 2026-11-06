@@ -62,7 +62,9 @@
 
   <label for="prompt">What should change?</label>
   <textarea id="prompt" class="prompt" placeholder="e.g. Add a function that emails me the sheet total every morning."></textarea>
-  <button id="askAi" class="primary" disabled>Ask AI</button>
+  <button id="copyPrompt" disabled>Copy prompt for Claude chat</button>
+  <button id="askAi" class="primary" disabled>Ask AI (needs proxy)</button>
+  <p class="hint">Manual way (uses your Claude subscription): click "Copy prompt", paste it into a Claude chat, then paste Claude's reply into "Proposed code" in step 4.</p>
 </fieldset>
 
 <!-- 4. Review and push -->
@@ -79,6 +81,7 @@
     </div>
   </div>
   <p class="hint">You can edit the proposed code before pushing.</p>
+  <p class="hint">Paste Claude's full reply here (manual mode), or it fills in automatically if you use "Ask AI".</p>
   <button id="push" class="primary" disabled>Push to Apps Script</button>
   <button id="discard" disabled>Discard proposal</button>
   <div id="status"></div>
@@ -162,6 +165,7 @@ $("loadProject").onclick = async () => {
     $("askAi").disabled = false;
     showCurrentFile();
     setStatus(`Loaded ${projectFiles.length} file(s).`);
+    $("copyPrompt").disabled = !$("prompt").value.trim();
   } catch (e) { setError("Could not load project: " + e.message); }
 };
 
@@ -170,6 +174,52 @@ function showCurrentFile() {
   $("currentCode").value = f ? (f.source || "") : "";
 }
 $("fileSelect").onchange = showCurrentFile;
+
+/* ============ MANUAL MODE (uses your Claude subscription, no API key) ============ */
+function enableProposalButtons() {
+  const hasText = $("proposedCode").value.trim().length > 0;
+  $("push").disabled = !hasText;
+  $("discard").disabled = !hasText;
+}
+
+$("copyPrompt").onclick = async () => {
+  const f = projectFiles[$("fileSelect").value];
+  const instruction = $("prompt").value.trim();
+  if (!f) { setError("Load the project and choose a file first."); return; }
+  if (!instruction) { setError("Describe what should change first."); return; }
+
+  const prompt =
+    "You are an expert Google Apps Script developer. Below is the current contents of one file, " +
+    "and a change I want. Reply with ONLY the complete updated file contents, no commentary and no markdown fences. " +
+    "Keep everything I didn't ask to change.\n\n" +
+    "File name: " + f.name + "\n\n" +
+    "Current file contents:\n" + (f.source || "") + "\n\n" +
+    "Change requested: " + instruction;
+
+  try {
+    await navigator.clipboard.writeText(prompt);
+    proposal = { file: f.name, content: "" };
+    setStatus("Prompt copied. Paste it into a Claude chat, then paste the reply into 'Proposed code' below.");
+    $("proposedCode").focus();
+  } catch {
+    // Clipboard blocked: show the prompt so it can be copied by hand.
+    $("proposedCode").value = prompt;
+    proposal = { file: f.name, content: "" };
+    setStatus("Could not copy automatically. The prompt is in the box: select all, copy, and paste it into Claude. Then replace the box with Claude's reply.");
+    enableProposalButtons();
+  }
+};
+
+$("proposedCode").addEventListener("input", () => {
+  if (!proposal) proposal = { file: projectFiles[$("fileSelect").value].name, content: "" };
+  enableProposalButtons();
+});
+
+// Enable the copy button once a file and an instruction exist.
+["prompt", "fileSelect"].forEach(id => $(id).addEventListener("input", () => {
+  $("copyPrompt").disabled = !(projectFiles.length && $("prompt").value.trim());
+}));
+$("fileSelect").addEventListener("change", () => { $("copyPrompt").disabled = !($("prompt").value.trim()); });
 
 /* ============ ASK AI (via Apps Script proxy) ============ */
 $("askAi").onclick = async () => {

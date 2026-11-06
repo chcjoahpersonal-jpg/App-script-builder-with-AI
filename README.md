@@ -5,9 +5,14 @@ Edit your Google Apps Script code by describing changes in plain English. The AI
 - `index.html`: the website (hosted on GitHub Pages)
 - `Proxy.gs`: a small Apps Script that holds your Claude API key and calls Claude for you
 
+## Two ways to use it
+
+- **Manual mode (no API key, uses your Claude subscription):** click **Copy prompt**, paste it into a Claude chat, copy Claude's reply, paste it into **Proposed code**, then click **Push**. Only steps B and C below are needed.
+- **Automatic mode (one click, needs API billing):** also do step A. Then **Ask AI** does the round trip for you.
+
 ## One-time setup
 
-### A. Deploy the proxy (keeps your API key in Google)
+### A. (Optional, automatic mode only) Deploy the proxy
 
 1. Go to script.google.com and click **New project**. Name it `AI Proxy`.
 2. Delete the default code, then paste in the full contents of `Proxy.gs`.
@@ -32,12 +37,13 @@ After a minute your site is at `https://<your-github-username>.github.io/App-scr
 
 1. Open the site and fill in **Settings**:
    - **Script ID**: in your target Apps Script project, click **Project Settings** → **Script ID**.
-   - **Proxy web app URL**: from step A5.
-   - **Proxy shared secret**: the `SHARED_SECRET` from step A3.
+   - **Proxy web app URL** and **Proxy shared secret** (automatic mode only): from step A.
    Click **Save settings**.
 2. Click **Sign in with Google** and approve. Then click **Load project files**.
-3. Choose the file to change, describe the change, and click **Ask AI**.
-4. Review the proposed code (edit it if needed), then click **Push to Apps Script**.
+3. Choose the file to change and describe the change.
+   - Manual: click **Copy prompt for Claude chat**, paste into Claude, and copy the reply.
+   - Automatic: click **Ask AI**.
+4. Paste Claude's reply into **Proposed code** (or let Ask AI fill it), review it, then click **Push to Apps Script**.
 
 The push overwrites the file in your project, so check the proposal first. Undo history is still available in the Apps Script editor (**Version history**).
 
